@@ -1,4 +1,4 @@
-# ESP32 Industrial IoT Monitoring & Control System
+ESP32-SCADA-Wireless-Monitoring-Control
 
 ![Platform](https://img.shields.io/badge/Platform-ESP32-0b6fa4)
 ![Framework](https://img.shields.io/badge/Framework-Arduino-00979d)
