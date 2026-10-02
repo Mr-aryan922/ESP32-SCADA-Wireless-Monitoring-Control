@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 Industrial Dashboard</title>
+<style>
+:root{
+  --bg:#0b1117; --panel:#121b24; --panel2:#0e161e; --line:#22313f; --ink:#e6eef5; --mute:#8aa0b2;
+  --accent:#22b8e0; --temp:#f5a524; --hum:#38bdf8; --gas:#ff5d73; --ir:#34d399; --bad:#ff5d73; --ok:#34d399;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#eef3f7; --panel:#ffffff; --panel2:#f5f8fa; --line:#d5dee6; --ink:#14212c; --mute:#5b6f80;
+    --accent:#0b6fa4; --temp:#c77700; --hum:#0b7fb8; --gas:#d6334b; --ir:#0f9d6b;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;line-height:1.4;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:6px 2px 16px;border-bottom:1px solid var(--line);margin-bottom:16px}
+h1{font-size:1.25rem;margin:0;letter-spacing:.2px}
+.sub{color:var(--mute);font-size:.82rem;margin-top:2px}
+.status{display:flex;align-items:center;gap:10px;font-size:.82rem;color:var(--mute)}
+.pill{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border:1px solid var(--line);border-radius:999px;background:var(--panel);font-weight:600;letter-spacing:.6px;font-size:.75rem}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--bad)}
+.live .dot{background:var(--ok);box-shadow:0 0 0 0 rgba(52,211,153,.6);animation:pulse 1.6s infinite}
+@keyframes pulse{70%{box-shadow:0 0 0 7px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
+.grid{display:grid;gap:12px}
+.metrics{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;position:relative;overflow:hidden}
+.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--c,var(--accent))}
+.lab{display:flex;align-items:center;gap:8px;color:var(--mute);font-size:.72rem;text-transform:uppercase;letter-spacing:.9px;font-weight:600}
+.lab svg{width:16px;height:16px;stroke:var(--c);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.val{font-size:2.1rem;font-weight:700;margin-top:6px;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+.val small{font-size:.9rem;font-weight:500;color:var(--mute);margin-left:4px;letter-spacing:0}
+.note{color:var(--mute);font-size:.72rem;margin-top:2px}
+.badge{display:inline-block;margin-top:6px;padding:2px 9px;border-radius:999px;font-size:.7rem;font-weight:700;letter-spacing:.6px;border:1px solid var(--line);color:var(--mute)}
+.badge.on{color:var(--ir);border-color:var(--ir)}
+h2{font-size:.82rem;text-transform:uppercase;letter-spacing:1px;color:var(--mute);margin:22px 2px 10px;font-weight:700}
+.charts{grid-template-columns:repeat(auto-fit,minmax(310px,1fr))}
+.chead{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.chead b{font-size:.95rem}
+.stats{color:var(--mute);font-size:.74rem;font-variant-numeric:tabular-nums}
+canvas{width:100%;height:190px;display:block}
+.relays{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.relay{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.relay .t b{display:block;font-size:1rem}
+.relay .t span{font-size:.78rem;color:var(--mute)}
+.sw{width:54px;height:30px;border-radius:999px;border:1px solid var(--line);background:var(--panel2);position:relative;cursor:pointer;padding:0;transition:background .2s,border-color .2s;flex:none}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:var(--mute);transition:transform .2s,background .2s}
+.sw[aria-checked="true"]{background:rgba(34,184,224,.18);border-color:var(--accent)}
+.sw[aria-checked="true"]::after{transform:translateX(24px);background:var(--accent)}
+.sw:disabled{opacity:.5;cursor:wait}
+.sw:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+footer{margin:22px 2px 6px;color:var(--mute);font-size:.74rem;border-top:1px solid var(--line);padding-top:12px}
+.stale .val{opacity:.45}
+#toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--panel);border:1px solid var(--bad);color:var(--ink);padding:8px 14px;border-radius:8px;font-size:.82rem;display:none}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div>
+    <h1>Industrial Monitoring Dashboard</h1>
+    <div class="sub">ESP32 Receiver &middot; ESP-NOW sensor node &middot; local network</div>
+  </div>
+  <div class="status">
+    <span id="upd">Waiting for data</span>
+    <span class="pill" id="pill"><span class="dot"></span><span id="pt">OFFLINE</span></span>
+  </div>
+</header>
+
+<section class="grid metrics" id="metrics">
+  <div class="card" style="--c:var(--temp)">
+    <div class="lab"><svg viewBox="0 0 24 24"><path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z"/></svg>Temperature</div>
+    <div class="val"><span id="temp">--</span><small>&deg;C</small></div>
+    <div class="note">DHT11</div>
+  </div>
+  <div class="card" style="--c:var(--hum)">
+    <div class="lab"><svg viewBox="0 0 24 24"><path d="M12 3s6 6.2 6 10.5a6 6 0 0 1-12 0C6 9.2 12 3 12 3z"/></svg>Humidity</div>
+    <div class="val"><span id="hum">--</span><small>%</small></div>
+    <div class="note">DHT11</div>
+  </div>
+  <div class="card" style="--c:var(--gas)">
+    <div class="lab"><svg viewBox="0 0 24 24"><path d="M4 16c2-5 5-5 8 0s6 5 8 0"/><path d="M4 9c2-5 5-5 8 0s6 5 8 0"/></svg>Gas Sensor Level</div>
+    <div class="val"><span id="gas">--</span></div>
+    <div class="note">MQ-2 raw reading (not PPM)</div>
+  </div>
+  <div class="card" style="--c:var(--ir)">
+    <div class="lab"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.2"/><path d="M7.5 7.5a6.4 6.4 0 0 0 0 9M16.5 7.5a6.4 6.4 0 0 1 0 9"/></svg>IR Sensor 1</div>
+    <div class="val"><span id="ir1">--</span></div>
+    <span class="badge" id="ir1b" style="display:none"></span>
+  </div>
+  <div class="card" style="--c:var(--ir)">
+    <div class="lab"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.2"/><path d="M7.5 7.5a6.4 6.4 0 0 0 0 9M16.5 7.5a6.4 6.4 0 0 1 0 9"/></svg>IR Sensor 2</div>
+    <div class="val"><span id="ir2">--</span></div>
+    <span class="badge" id="ir2b" style="display:none"></span>
+  </div>
+</section>
+
+<h2>Live trends</h2>
+<section class="grid charts">
+  <div class="card" style="--c:var(--temp)">
+    <div class="chead"><b>Temperature trend</b><span class="stats" id="tstat">min -- &middot; avg -- &middot; max --</span></div>
+    <canvas id="tc"></canvas>
+  </div>
+  <div class="card" style="--c:var(--gas)">
+    <div class="chead"><b>Gas level trend</b><span class="stats" id="gstat">min -- &middot; avg -- &middot; max --</span></div>
+    <canvas id="gc"></canvas>
+  </div>
+</section>
+
+<h2>Relay control</h2>
+<section class="grid relays">
+  <div class="card relay" style="--c:var(--accent)">
+    <div class="t"><b>Relay 1</b><span id="r1t">State unknown</span></div>
+    <button class="sw" id="r1" role="switch" aria-checked="false" aria-label="Relay 1"></button>
+  </div>
+  <div class="card relay" style="--c:var(--accent)">
+    <div class="t"><b>Relay 2</b><span id="r2t">State unknown</span></div>
+    <button class="sw" id="r2" role="switch" aria-checked="false" aria-label="Relay 2"></button>
+  </div>
+</section>
+
+<footer>Prototype &middot; MQ-2 values are raw sensor levels, not calibrated PPM &middot; Data refreshes every second from /data</footer>
+</div>
+<div id="toast"></div>
+
+<script>
+// ---- Settings (match these to the Receiver firmware) ----
+const CFG = {
+  POLL_MS: 1000,          // refresh interval
+  MAX_POINTS: 60,         // points kept in each chart (60 s at 1 s refresh)
+  DEMO: /*DEMO*/false,    // true = simulated data for layout preview only
+  RELAY_URL: (n, on) => "/relay?id=" + n + "&state=" + (on ? 1 : 0), // set to your firmware's relay endpoint
+  RELAY_ON_VALUE: 1,      // value of r1/r2 in /data that means "relay ON"
+  IR_ACTIVE_VALUE: null   // set to 0 or 1 to show DETECTED/CLEAR; null shows the raw value only
+};
+
+const $ = id => document.getElementById(id);
+const S = { temp: [], gas: [] };
+const ST = { temp: {n:0,s:0,mn:1e9,mx:-1e9}, gas: {n:0,s:0,mn:1e9,mx:-1e9} };
+let busy = false, sim = { t: 26, h: 52, g: 320, r1: 0, r2: 0 };
+
+function num(v){ v = Number(v); return isFinite(v) ? v : null; }
+function fmt(v, d){ return v === null ? "--" : v.toFixed(d); }
+
+function demo(){
+  sim.t += (Math.random()-.5)*.4; sim.h += (Math.random()-.5);
+  sim.g += (Math.random()-.5)*24; if (Math.random() < .03) sim.g += 120;
+  return { temp: sim.t, hum: sim.h, gas: Math.round(sim.g),
+           ir1: Math.random() > .85 ? 1 : 0, ir2: Math.random() > .85 ? 1 : 0, r1: sim.r1, r2: sim.r2 };
+}
+
+function push(key, v){
+  if (v === null) return;
+  const a = S[key]; a.push(v); if (a.length > CFG.MAX_POINTS) a.shift();
+  const s = ST[key]; s.n++; s.s += v; s.mn = Math.min(s.mn, v); s.mx = Math.max(s.mx, v);
+}
+function statText(key, d){
+  const s = ST[key]; if (!s.n) return "min -- \u00b7 avg -- \u00b7 max --";
+  return "min " + s.mn.toFixed(d) + " \u00b7 avg " + (s.s/s.n).toFixed(d) + " \u00b7 max " + s.mx.toFixed(d);
+}
+
+function draw(cv, arr, color, d){
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== Math.round(w*dpr) || cv.height !== Math.round(h*dpr)){ cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr); }
+  const c = cv.getContext("2d"); c.setTransform(dpr,0,0,dpr,0,0); c.clearRect(0,0,w,h);
+  const cs = getComputedStyle(document.documentElement);
+  const line = cs.getPropertyValue("--line").trim(), mute = cs.getPropertyValue("--mute").trim(), col = cs.getPropertyValue(color).trim();
+  c.font = "11px system-ui,sans-serif"; c.textBaseline = "middle";
+  const L = 46, R = 10, T = 8, B = 22, pw = w-L-R, ph = h-T-B;
+  if (arr.length < 2){ c.fillStyle = mute; c.textAlign = "center"; c.fillText("Waiting for data...", w/2, h/2); return; }
+  let mn = Math.min.apply(null, arr), mx = Math.max.apply(null, arr);
+  if (mx - mn < 1e-6){ mn -= 1; mx += 1; }
+  const pad = (mx-mn)*.15; mn -= pad; mx += pad;
+  const X = i => L + pw*i/(CFG.MAX_POINTS-1), Y = v => T + ph*(1-(v-mn)/(mx-mn));
+  c.strokeStyle = line; c.fillStyle = mute; c.lineWidth = 1; c.textAlign = "right";
+  for (let i = 0; i <= 4; i++){
+    const y = T + ph*i/4; c.beginPath(); c.moveTo(L,y); c.lineTo(w-R,y); c.stroke();
+    c.fillText((mx-(mx-mn)*i/4).toFixed(d), L-6, y);
+  }
+  const off = CFG.MAX_POINTS - arr.length;
+  c.textAlign = "left"; c.fillText("-" + Math.round((CFG.MAX_POINTS-1)*CFG.POLL_MS/1000) + "s", L, h-8);
+  c.textAlign = "right"; c.fillText("now", w-R, h-8);
+  const g = c.createLinearGradient(0,T,0,T+ph); g.addColorStop(0, col+"55"); g.addColorStop(1, col+"00");
+  c.beginPath(); arr.forEach((v,i) => i ? c.lineTo(X(i+off),Y(v)) : c.moveTo(X(i+off),Y(v)));
+  c.lineTo(X(arr.length-1+off), T+ph); c.lineTo(X(off), T+ph); c.closePath(); c.fillStyle = g; c.fill();
+  c.beginPath(); arr.forEach((v,i) => i ? c.lineTo(X(i+off),Y(v)) : c.moveTo(X(i+off),Y(v)));
+  c.strokeStyle = col; c.lineWidth = 2; c.lineJoin = "round"; c.stroke();
+  const lx = X(arr.length-1+off), ly = Y(arr[arr.length-1]);
+  c.beginPath(); c.arc(lx,ly,3.5,0,6.283); c.fillStyle = col; c.fill();
+}
+
+function irView(id, v){
+  $(id).textContent = v === null ? "--" : v;
+  const b = $(id+"b");
+  if (CFG.IR_ACTIVE_VALUE === null || v === null){ b.style.display = "none"; return; }
+  const on = v === CFG.IR_ACTIVE_VALUE; b.style.display = "inline-block";
+  b.textContent = on ? "DETECTED" : "CLEAR"; b.className = "badge" + (on ? " on" : "");
+}
+function relayView(id, v){
+  const sw = $(id), t = $(id+"t");
+  if (v === null){ t.textContent = "State unknown"; return; }
+  const on = v === CFG.RELAY_ON_VALUE;
+  sw.setAttribute("aria-checked", on ? "true" : "false"); t.textContent = on ? "ON" : "OFF";
+}
+
+function render(d){
+  const t = num(d.temp), h = num(d.hum), g = num(d.gas);
+  $("temp").textContent = fmt(t,1); $("hum").textContent = fmt(h,1); $("gas").textContent = g === null ? "--" : Math.round(g);
+  irView("ir1", num(d.ir1)); irView("ir2", num(d.ir2));
+  relayView("r1", num(d.r1)); relayView("r2", num(d.r2));
+  push("temp", t); push("gas", g);
+  draw($("tc"), S.temp, "--temp", 1); draw($("gc"), S.gas, "--gas", 0);
+  $("tstat").textContent = statText("temp",1); $("gstat").textContent = statText("gas",0);
+  $("upd").textContent = "Updated " + new Date().toLocaleTimeString();
+}
+function setLive(on){
+  $("pill").className = "pill" + (on ? " live" : ""); $("pt").textContent = on ? "LIVE" : "OFFLINE";
+  $("metrics").className = "grid metrics" + (on ? "" : " stale");
+}
+
+async function poll(){
+  if (busy) return; busy = true;
+  try{
+    let d;
+    if (CFG.DEMO) d = demo();
+    else {
+      const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 3000);
+      const res = await fetch("/data?t=" + Date.now(), { cache: "no-store", signal: ctl.signal });
+      clearTimeout(to); if (!res.ok) throw new Error(res.status); d = await res.json();
+    }
+    render(d); setLive(true);
+  }catch(e){ setLive(false); }
+  busy = false;
+}
+
+function toast(m){ const t = $("toast"); t.textContent = m; t.style.display = "block"; setTimeout(() => t.style.display = "none", 2500); }
+async function toggle(n){
+  const sw = $("r"+n), want = sw.getAttribute("aria-checked") !== "true";
+  sw.disabled = true;
+  try{
+    if (CFG.DEMO){ sim["r"+n] = want ? CFG.RELAY_ON_VALUE : 0; }
+    else { const res = await fetch(CFG.RELAY_URL(n, want), { cache: "no-store" }); if (!res.ok) throw new Error(res.status); }
+    relayView("r"+n, want ? CFG.RELAY_ON_VALUE : (CFG.RELAY_ON_VALUE ? 0 : 1));
+  }catch(e){ toast("Relay " + n + " command failed"); }
+  sw.disabled = false;
+}
+$("r1").onclick = () => toggle(1); $("r2").onclick = () => toggle(2);
+window.addEventListener("resize", () => { draw($("tc"), S.temp, "--temp", 1); draw($("gc"), S.gas, "--gas", 0); });
+poll(); setInterval(poll, CFG.POLL_MS);
+</script>
+</body>
+</html>
